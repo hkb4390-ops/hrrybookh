@@ -1,15 +1,15 @@
 import os
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import sqlite3
 from dotenv import load_dotenv
 
-# --- RENDER KE LIYE ENVIRONMENT SETUP ---
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN', '8858220246:AAHaEwMfb-9I6hAX-SlQqcvsamZt8scM5Mg')
-BOT_USERNAME = os.getenv('BOT_USERNAME', 'hrrrrrrrrry_bot')
-CHANNEL_USERNAME = os.getenv('CHANNEL_USERNAME', '@hrbseb10thallcorse')
-ADMIN_ID = os.getenv('ADMIN_ID', '0') # Default 0 agar admin id set nahi hai
+# Yahan channel ka numeric ID ya public username dena zaroori hai invite links generate karne ke liye.
+# ID hamesha -100 se start hoti hai.
+CHANNEL_ID = os.getenv('CHANNEL_ID', '-1004498096954') 
+ADMIN_ID = os.getenv('ADMIN_ID', '0')
 try:
     ADMIN_ID = int(ADMIN_ID)
 except ValueError:
@@ -17,10 +17,7 @@ except ValueError:
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- PREMIUM CONTENT DATA ---
-# Yahan aap image link daal sakte hain jo start command par aayegi
-WELCOME_IMAGE = "https://i.postimg.cc/q7zvQKQ0/bhramastra-banner.jpg" # Isko aap apne kisi banner link se replace kar sakte hain
-
+# --- PDF LINKS ---
 PDF_LINKS = {
     1: {"name": "Economic", "link": "https://drive.google.com/file/d/1hbKSxeX6SWK0lpSWHo21vNK8l9F5IXJ9/view?usp=drivesdk"},
     2: {"name": "Physics", "link": "https://drive.google.com/file/d/1PN9LaQCaWWCfV7xdNCb8PgC671Fs7hdQ/view?usp=drivesdk"},
@@ -33,106 +30,76 @@ PDF_LINKS = {
     9: {"name": "English", "link": "https://drive.google.com/file/d/1GSTyzCiPRwcmfGiaFR-NJRBe2El5UVEj/view?usp=drivesdk"}
 }
 
-# --- DATABASE SETUP (ROBUST) ---
-conn = sqlite3.connect('premium_bot_data.db', check_same_thread=False)
+# --- DATABASE SETUP ---
+conn = sqlite3.connect('channel_growth_bot.db', check_same_thread=False)
 cursor = conn.cursor()
+# Users table store karega: user id, channel ka unka special link, aur kitne logo ne join kiya.
 cursor.execute('''CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY, 
-                    first_name TEXT,
-                    referrals INTEGER DEFAULT 0,
-                    joined_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+                    invite_link TEXT,
+                    joins_count INTEGER DEFAULT 0)''')
 conn.commit()
 
-# --- HELPER FUNCTIONS ---
-def is_subscribed(user_id):
-    try:
-        status = bot.get_chat_member(CHANNEL_USERNAME, user_id).status
-        if status in ['member', 'administrator', 'creator']:
-            return True
-        return False
-    except Exception as e:
-        print(f"Sub check error: {e}")
-        return False
-
-def get_user_data(user_id):
-    cursor.execute("SELECT referrals FROM users WHERE user_id=?", (user_id,))
+# --- HELPER FUNCTION: Get or Create Invite Link ---
+def get_user_invite_link(user_id):
+    cursor.execute("SELECT invite_link FROM users WHERE user_id=?", (user_id,))
     res = cursor.fetchone()
-    return res[0] if res else 0
-
-def add_user(user_id, first_name):
-    cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
-    if not cursor.fetchone():
-        cursor.execute("INSERT INTO users (user_id, first_name, referrals) VALUES (?, ?, ?)", (user_id, first_name, 0))
+    
+    if res and res[0]:
+        return res[0]
+    
+    # Agar link nahi hai, toh channel par naya link generate karo
+    try:
+        # Bot must have 'Add Users' admin right in the channel
+        invite_link_obj = bot.create_chat_invite_link(
+            chat_id=CHANNEL_ID,
+            name=f"Invite by {user_id}", # Ye channel admins ko dikhega
+            creates_join_request=False
+        )
+        new_link = invite_link_obj.invite_link
+        
+        # Save to database
+        if res:
+            cursor.execute("UPDATE users SET invite_link=? WHERE user_id=?", (new_link, user_id))
+        else:
+            cursor.execute("INSERT INTO users (user_id, invite_link, joins_count) VALUES (?, ?, 0)", (user_id, new_link))
         conn.commit()
-        return True
-    return False
+        return new_link
+    except Exception as e:
+        print(f"Error creating link: {e}")
+        return None
 
-# --- MAIN LOGIC ---
-
+# --- COMMANDS ---
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
     user_id = message.chat.id
     first_name = message.from_user.first_name
-    text_parts = message.text.split()
     
-    is_new_user = add_user(user_id, first_name)
-    
-    # Referral Logic
-    if is_new_user and len(text_parts) > 1:
-        referrer_id = text_parts[1]
-        try:
-            referrer_id = int(referrer_id)
-            if referrer_id != user_id:
-                cursor.execute("UPDATE users SET referrals = referrals + 1 WHERE user_id=?", (referrer_id,))
-                conn.commit()
-                # Notify Referrer with Premium Style
-                bot.send_message(
-                    referrer_id, 
-                    f"🎉 **VIP ALERT!**\n\nEk naye dost ne aapke link se join kiya hai.\n📈 Aapka Score Badh Gaya! Check your Dashboard.", 
-                    parse_mode="Markdown"
-                )
-        except ValueError:
-            pass
+    # Ensure user exists in DB
+    cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO users (user_id, invite_link, joins_count) VALUES (?, NULL, 0)", (user_id,))
+        conn.commit()
 
     show_main_menu(message)
 
 def show_main_menu(message, edit_msg_id=None):
     user_id = message.chat.id
-    first_name = message.from_user.first_name
     
-    if not is_subscribed(user_id):
-        # Premium Force Sub Menu
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("🌟 Join Official Channel", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}"))
-        markup.add(InlineKeyboardButton("🔄 Verify Join", callback_data="verify_sub"))
-        
-        text = f"✋ **Rukiye {first_name}!**\n\nBhramastra Premium PDFs 📚 aur sabhi updates ke liye aapko hamara official channel join karna hoga.\n\n👇 **Pehle channel join karein, fir 'Verify Join' dabayein.**"
-        
-        if edit_msg_id:
-            try:
-                bot.edit_message_text(text, user_id, edit_msg_id, reply_markup=markup, parse_mode="Markdown")
-            except: pass
-        else:
-            # Agar chaho toh start me image bhejne ke liye isko uncomment kar sakte ho
-            # bot.send_photo(user_id, WELCOME_IMAGE, caption=text, reply_markup=markup, parse_mode="Markdown")
-            bot.send_message(user_id, text, reply_markup=markup, parse_mode="Markdown")
-        return
-
-    # Premium Main Menu Layout
     markup = InlineKeyboardMarkup(row_width=2)
+    btn_link = InlineKeyboardButton("🔗 Get Channel Invite Link", callback_data="get_channel_link")
     btn_dash = InlineKeyboardButton("📊 My Dashboard", callback_data="open_dashboard")
-    btn_link = InlineKeyboardButton("🔗 Generate VIP Link", callback_data="open_referral")
-    btn_pdfs = InlineKeyboardButton("📚 Premium PDFs Center", callback_data="open_pdfs")
-    btn_leader = InlineKeyboardButton("🏆 Top Referrers", callback_data="leaderboard")
+    btn_pdfs = InlineKeyboardButton("📚 My PDFs", callback_data="open_pdfs")
     
-    markup.add(btn_dash, btn_link)
-    markup.add(btn_pdfs)
-    markup.add(btn_leader)
+    markup.add(btn_link)
+    markup.add(btn_dash, btn_pdfs)
     
-    text = f"🔰 **Welcome to Bhramastra VIP Hub, {first_name}!** 🔰\n\n"
-    text += "🔹 Yahan aapko class 10th ki sabhi Premium PDF books milengi.\n"
-    text += "🔹 Doston ko invite karein aur PDFs unlock karein.\n\n"
-    text += "⚡ _Apna option niche select karein:_"
+    text = f"🔰 **Welcome to Bhramastra PDF Bot!** 🔰\n\n"
+    text += "Yahan aap Class 10th ki Bhramastra books FREE me unlock kar sakte hain.\n\n"
+    text += "**Kaise Unlock Karein?**\n"
+    text += "1️⃣ `Get Channel Invite Link` par click karein.\n"
+    text += "2️⃣ Us link ko doston ke sath share karein.\n"
+    text += "3️⃣ Jaise hi wo aapke link se **Hamara Channel Join** karenge, aapki PDFs unlock ho jayengi! 🚀"
 
     if edit_msg_id:
         try:
@@ -141,139 +108,109 @@ def show_main_menu(message, edit_msg_id=None):
     else:
         bot.send_message(user_id, text, reply_markup=markup, parse_mode="Markdown")
 
-# --- CALLBACK HANDLERS (Interactivity) ---
+# --- CALLBACK HANDLERS ---
 @bot.callback_query_handler(func=lambda call: True)
 def query_handler(call):
     user_id = call.message.chat.id
     msg_id = call.message.message_id
     
-    if call.data == "verify_sub":
-        if is_subscribed(user_id):
-            bot.answer_callback_query(call.id, "✅ Verification Successful! Welcome to Premium Hub.", show_alert=True)
-            show_main_menu(call.message, msg_id)
-        else:
-            bot.answer_callback_query(call.id, "❌ Aapne abhi tak Join nahi kiya. Channel check karein!", show_alert=True)
-            
-    elif call.data == "open_dashboard":
-        if not is_subscribed(user_id): return show_main_menu(call.message, msg_id)
+    if call.data == "get_channel_link":
+        invite_link = get_user_invite_link(user_id)
         
-        refs = get_user_data(user_id)
-        unlocked = min(refs, 9)
+        if invite_link:
+            text = "💎 **YOUR CHANNEL INVITE LINK** 💎\n\n"
+            text += "Niche diye gaye link ko copy karein aur share karein:\n\n"
+            text += f"`{invite_link}`\n\n"
+            text += "⚠️ _Dhyan rahe: Jab log is link se channel join karenge, tabhi aapka count badhega._"
+            
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🔙 Main Menu", callback_data="back_home"))
+            bot.edit_message_text(text, user_id, msg_id, reply_markup=markup, parse_mode="Markdown")
+        else:
+            bot.answer_callback_query(call.id, "❌ Error: Bot ko Channel me Admin banayein aur 'Manage Invite Links' ki permission dein.", show_alert=True)
+
+    elif call.data == "open_dashboard":
+        cursor.execute("SELECT joins_count FROM users WHERE user_id=?", (user_id,))
+        res = cursor.fetchone()
+        joins = res[0] if res else 0
+        unlocked = min(joins, 9)
         progress_bar = "🟢" * unlocked + "🔴" * (9 - unlocked)
         
-        text = "🎛 **YOUR VIP DASHBOARD** 🎛\n━━━━━━━━━━━━━━━━━━━━\n"
-        text += f"👤 **Profile:** `{call.from_user.first_name}`\n"
-        text += f"🆔 **Account ID:** `{user_id}`\n\n"
-        text += f"👥 **Total Invites:** `{refs}` Friends\n"
-        text += f"🔓 **Unlocked Items:** `{unlocked}/9` PDFs\n"
+        text = "🎛 **YOUR CHANNEL GROWTH DASHBOARD** 🎛\n━━━━━━━━━━━━━━━━━━━━\n"
+        text += f"👥 **People Joined Channel:** `{joins}`\n"
+        text += f"🔓 **Unlocked PDFs:** `{unlocked}/9`\n"
         text += f"📊 **Progress:** [{progress_bar}]\n━━━━━━━━━━━━━━━━━━━━\n"
         
-        if unlocked < 9:
-            text += f"⚠️ _Agli PDF unlock karne ke liye aur logo ko invite karein!_"
-        else:
-            text += f"🎉 _Congratulations! Aapne sabhi PDFs unlock kar li hain._"
-
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🔙 Main Menu", callback_data="back_home"))
-        bot.edit_message_text(text, user_id, msg_id, reply_markup=markup, parse_mode="Markdown")
-
-    elif call.data == "open_referral":
-        if not is_subscribed(user_id): return show_main_menu(call.message, msg_id)
-        
-        ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
-        
-        text = "💎 **YOUR VIP INVITE SYSTEM** 💎\n\n"
-        text += "Niche diye gaye link par click karke copy karein:\n"
-        text += f"👉 `{ref_link}` 👈\n\n"
-        text += "🚀 **Rules:**\n"
-        text += "1️⃣ Apne doston ko ye link bhejein.\n"
-        text += "2️⃣ Unko channel join karwayein.\n"
-        text += "3️⃣ Aapka PDF unlock ho jayega! 🔓"
-        
-        markup = InlineKeyboardMarkup()
-        share_url = f"https://t.me/share/url?url={ref_link}&text=🔥%20Bhramastra%20Class%2010th%20ki%20saari%20Premium%20PDFs%20FREE%20me%20chahiye?%20Ye%20Bot%20join%20karo%20fast!%20🚀"
-        markup.add(InlineKeyboardButton("🚀 Share Directly on Telegram", url=share_url))
-        markup.add(InlineKeyboardButton("🔙 Main Menu", callback_data="back_home"))
-        
         bot.edit_message_text(text, user_id, msg_id, reply_markup=markup, parse_mode="Markdown")
 
     elif call.data == "open_pdfs":
-        if not is_subscribed(user_id): return show_main_menu(call.message, msg_id)
-        
-        refs = get_user_data(user_id)
+        cursor.execute("SELECT joins_count FROM users WHERE user_id=?", (user_id,))
+        res = cursor.fetchone()
+        joins = res[0] if res else 0
         
         text = "📚 **PREMIUM PDF CENTER** 📚\n\n"
-        text += f"Aapke paas **{refs} Invites** hain.\n\n"
         
         markup = InlineKeyboardMarkup(row_width=1)
         
-        if refs == 0:
-            text += "🔒 _Oops! Aapka saara khazana lock hai. Pehle kisi dost ko invite karein!_"
-            markup.add(InlineKeyboardButton("🔗 Invite Friends to Unlock", callback_data="open_referral"))
+        if joins == 0:
+            text += "🔒 _Oops! Aapka saara khazana lock hai. Apne link se kisi ko channel join karwayein!_"
         else:
             for i in range(1, 10):
-                if refs >= i:
+                if joins >= i:
                     text += f"✅ **Unlocked:** {PDF_LINKS[i]['name']}\n"
                     markup.add(InlineKeyboardButton(f"📥 Download {PDF_LINKS[i]['name']} PDF", url=PDF_LINKS[i]['link']))
                 else:
-                    text += f"🔒 **Locked:** {PDF_LINKS[i]['name']} (Need {i} Invites)\n"
+                    text += f"🔒 **Locked:** {PDF_LINKS[i]['name']} (Need {i} Channel Joins)\n"
         
         markup.add(InlineKeyboardButton("🔙 Main Menu", callback_data="back_home"))
         bot.edit_message_text(text, user_id, msg_id, reply_markup=markup, parse_mode="Markdown")
         
-    elif call.data == "leaderboard":
-        # Extra Feature: Top users dekhne ke liye
-        cursor.execute("SELECT first_name, referrals FROM users ORDER BY referrals DESC LIMIT 5")
-        top_users = cursor.fetchall()
-        
-        text = "🏆 **GLOBAL LEADERBOARD (TOP 5)** 🏆\n━━━━━━━━━━━━━━━━━━━━\n"
-        if not top_users or top_users[0][1] == 0:
-            text += "Abhi tak kisi ne invite nahi kiya hai. Aap pehle ban sakte hain!\n"
-        else:
-            medals = ["🥇", "🥈", "🥉", "🏅", "🏅"]
-            for idx, user in enumerate(top_users):
-                if user[1] > 0:
-                    name = user[0] if user[0] else "User"
-                    text += f"{medals[idx]} **{name}** - `{user[1]} Invites`\n"
-        text += "━━━━━━━━━━━━━━━━━━━━\n"
-        
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("🔙 Main Menu", callback_data="back_home"))
-        bot.edit_message_text(text, user_id, msg_id, reply_markup=markup, parse_mode="Markdown")
-
     elif call.data == "back_home":
         show_main_menu(call.message, msg_id)
 
-# --- ADMIN BROADCAST SYSTEM (Premium Feature) ---
-# Command: /broadcast <message>
-@bot.message_handler(commands=['broadcast'])
-def broadcast(message):
-    user_id = message.chat.id
-    if user_id != ADMIN_ID and ADMIN_ID != 0:
-        bot.reply_to(message, "❌ Ye command sirf Admin ke liye hai.")
-        return
+
+# =======================================================
+# 🔥 THE MOST IMPORTANT PART: TRACKING CHANNEL JOINS 🔥
+# =======================================================
+# Jab bhi koi channel join karta hai invite link ke through, 
+# telegram update bhejta hai jise hum chat_member update kehte hain.
+
+@bot.chat_member_handler()
+def handle_chat_member_update(message: telebot.types.ChatMemberUpdated):
+    # Sirf un updates ko dekho jisme naya member add hua ho
+    new_chat_member = message.new_chat_member
+    old_chat_member = message.old_chat_member
+
+    # Agar koi user channel me naya aaya hai (pehle left tha ya tha hi nahi, aur ab member ban gaya)
+    if (old_chat_member.status in ['left', 'kicked'] and new_chat_member.status in ['member', 'restricted']) or \
+       (old_chat_member.status == 'left' and new_chat_member.status == 'member'):
         
-    text = message.text.replace("/broadcast", "").strip()
-    if not text:
-        bot.reply_to(message, "⚠️ Format: `/broadcast Aapka message yahan likhein`", parse_mode="Markdown")
-        return
-        
-    cursor.execute("SELECT user_id FROM users")
-    users = cursor.fetchall()
-    
-    success = 0
-    failed = 0
-    bot.reply_to(message, f"⏳ Broadcasting to {len(users)} users...")
-    
-    for u in users:
-        try:
-            bot.send_message(u[0], f"📢 **ADMIN UPDATE**\n\n{text}", parse_mode="Markdown")
-            success += 1
-        except:
-            failed += 1
+        # message.invite_link me us link ki detail hoti hai jisse user ne join kiya hai
+        if message.invite_link:
+            used_link = message.invite_link.invite_link
             
-    bot.send_message(user_id, f"✅ **Broadcast Complete!**\n\n📤 Sent: {success}\n❌ Failed (Blocked bot): {failed}")
+            # Database me check karo ki ye link kis user ka tha
+            cursor.execute("SELECT user_id FROM users WHERE invite_link=?", (used_link,))
+            res = cursor.fetchone()
+            
+            if res:
+                referrer_id = res[0]
+                # Jisne link banwaya tha, uska count badha do
+                cursor.execute("UPDATE users SET joins_count = joins_count + 1 WHERE user_id=?", (referrer_id,))
+                conn.commit()
+                
+                # Referrer ko bot message bhej dega ki kisi ne join kiya
+                try:
+                    bot.send_message(
+                        referrer_id, 
+                        "🎉 **Badhai Ho!**\n\nEk naye dost ne aapke link se **Channel Join** kar liya hai! Aapka PDF status update ho gaya hai.",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
 
-
-print("🚀 Premium Bot is booting up...")
-bot.infinity_polling(timeout=10, long_polling_timeout=5)
+print("🚀 Advanced Channel Tracker Bot is running...")
+# allowed_updates=['chat_member', 'message', 'callback_query'] dena zaroori hai taaki bot joins ko track kar sake
+bot.infinity_polling(allowed_updates=['chat_member', 'message', 'callback_query'])
