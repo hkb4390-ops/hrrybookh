@@ -5,7 +5,7 @@ import sqlite3
 from dotenv import load_dotenv
 
 load_dotenv()
-BOT_TOKEN = os.getenv('BOT_TOKEN', '8858220246:AAHaEwMfb-9I6hAX-SlQqcvsamZt8scM5Mg')
+BOT_TOKEN = os.getenv('BOT_TOKEN', '8858220246:AAHePTJ3SXHbS-baO3XtRE1DqmsE0Aojfqs')
 # Yahan channel ka numeric ID ya public username dena zaroori hai invite links generate karne ke liye.
 # ID hamesha -100 se start hoti hai.
 CHANNEL_ID = os.getenv('CHANNEL_ID', '-1004498096954') 
