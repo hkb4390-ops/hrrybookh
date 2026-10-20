@@ -1,992 +1,740 @@
 import os
 import time
-import html
 import sqlite3
 import logging
 import threading
-from datetime import datetime, timezone
 from contextlib import contextmanager
 
 import telebot
 from telebot import types
 from dotenv import load_dotenv
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
 load_dotenv()
 
+# ==============================
+# CONFIGURATION
+# ==============================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-BOT_USERNAME = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "hrrrrrrrrry_bot").strip().lstrip("@")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "-1004498096954").strip()
 CHANNEL_USERNAME = os.getenv(
     "CHANNEL_USERNAME", "hrbseb10thallcorse"
 ).strip().lstrip("@")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "").strip()
-ADMIN_ID_RAW = os.getenv("ADMIN_ID", "0").strip()
-DATABASE_PATH = os.getenv(
-    "DATABASE_PATH", "bot_database.db"
-).strip()
 
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+DATABASE_PATH = os.getenv("DATABASE_PATH", "bot_database.db")
+REQUIRED_REFERRALS = 10
 
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is missing from environment variables.")
+CHANNEL_URL = f"https://t.me/{CHANNEL_USERNAME}"
 
-try:
-    ADMIN_ID = int(ADMIN_ID_RAW)
-except ValueError:
-    raise RuntimeError("ADMIN_ID must be a numeric Telegram user ID.")
-
-if not CHANNEL_ID:
-    raise RuntimeError("CHANNEL_ID is missing from environment variables.")
-
-try:
-    CHANNEL_ID = int(CHANNEL_ID)
-except ValueError:
-    raise RuntimeError("CHANNEL_ID must be a numeric channel ID.")
-
-if not BOT_USERNAME:
-    raise RuntimeError("BOT_USERNAME is missing from environment variables.")
-
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
-
-logger = logging.getLogger("bhramastra-bot")
-
-bot = telebot.TeleBot(
-    BOT_TOKEN,
-    parse_mode="HTML",
-    threaded=True,
-    num_threads=8,
-)
-
-DB_LOCK = threading.RLock()
-
-# ============================================================
-# PDF REWARDS
-# ============================================================
-
-PDF_REWARDS = [
-    {
-        "id": 1,
-        "title": "Economics",
-        "emoji": "📊",
-        "threshold": 1,
-        "url": "https://drive.google.com/file/d/1hbKSxeX6SWK0lpSWHo21vNK8l9F5IXJ9/view?usp=drivesdk",
-    },
-    {
-        "id": 2,
-        "title": "Physics",
-        "emoji": "⚡",
-        "threshold": 2,
-        "url": "https://drive.google.com/file/d/1PN9LaQCaWWCfV7xdNCb8PgC671Fs7hdQ/view?usp=drivesdk",
-    },
-    {
-        "id": 3,
-        "title": "Civics",
-        "emoji": "🏛️",
-        "threshold": 3,
-        "url": "https://drive.google.com/file/d/1_t7x5irxluEdx7ugxo2lbdLctFss0dWD/view?usp=drivesdk",
-    },
-    {
-        "id": 4,
-        "title": "History",
-        "emoji": "📜",
-        "threshold": 4,
-        "url": "https://drive.google.com/file/d/1AujJJqkmWFl9cFeB4_MsQ9ffU2m40vsB/view?usp=drivesdk",
-    },
-    {
-        "id": 5,
-        "title": "Mathematics",
-        "emoji": "📐",
-        "threshold": 5,
-        "url": "https://drive.google.com/file/d/1bI5Siizo_vqftacfvZ_HR7vY3bDcgzMa/view?usp=drivesdk",
-    },
-    {
-        "id": 6,
-        "title": "Chemistry",
-        "emoji": "🧪",
-        "threshold": 6,
-        "url": "https://drive.google.com/file/d/1O890P8zKHkRk0jmaPp4cxGHvGn-lI8OY/view?usp=drivesdk",
-    },
-    {
-        "id": 7,
-        "title": "Biology",
-        "emoji": "🧬",
-        "threshold": 7,
-        "url": "https://drive.google.com/file/d/1oP8A7XC6-aPkZCwJLhAF_c2uNqXmdXzp/view?usp=drivesdk",
-    },
-    {
-        "id": 8,
-        "title": "Sanskrit",
-        "emoji": "🕉️",
-        "threshold": 8,
-        "url": "https://drive.google.com/file/d/1X0CZR2AZ33EuEHAhFtzi9wYpsBts6FjB/view?usp=drivesdk",
-    },
-    {
-        "id": 9,
-        "title": "English",
-        "emoji": "📘",
-        "threshold": 9,
-        "url": "https://drive.google.com/file/d/1GSTyzCiPRwcmfGiaFR-NJRBe2El5UVEj/view?usp=drivesdk",
-    },
+# PDF links — use only files you are allowed to distribute.
+PDF_LINKS = [
+    ("📘 Economics", "https://drive.google.com/file/d/1hbKSxeX6SWK0lpSWHo21vNK8l9F5IXJ9/view"),
+    ("📗 Physics", "https://drive.google.com/file/d/1PN9LaQCaWWCfV7xdNCb8PgC671Fs7hdQ/view"),
+    ("📙 Civics", "https://drive.google.com/file/d/1_t7x5irxluEdx7ugxo2lbdLctFss0dWD/view"),
+    ("📕 History", "https://drive.google.com/file/d/1AujJJqkmWFl9cFeB4_MsQ9ffU2m40vsB/view"),
+    ("📐 Mathematics", "https://drive.google.com/file/d/1bI5Siizo_vqftacfvZ_HR7vY3bDcgzMa/view"),
+    ("🧪 Chemistry", "https://drive.google.com/file/d/1O890P8zKHkRk0jmaPp4cxGHvGn-lI8OY/view"),
+    ("🧬 Biology", "https://drive.google.com/file/d/1oP8A7XC6-aPkZCwJLhAF_c2uNqXmdXzp/view"),
+    ("📖 Sanskrit", "https://drive.google.com/file/d/1X0CZR2AZ33EuEHAhFtzi9wYpsBts6FjB/view"),
+    ("📚 English", "https://drive.google.com/file/d/1GSTyzCiPRwcmfGiaFR-NJRBe2El5UVEj/view"),
 ]
 
-# ============================================================
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN environment variable is missing.")
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+log = logging.getLogger("bhramastra-bot")
+
+bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
+
+# Serialize writes and prevent duplicate referral credits.
+db_lock = threading.RLock()
+
+
+# ==============================
 # DATABASE
-# ============================================================
+# ==============================
 
 @contextmanager
-def db_connection():
-    """
-    Open a short-lived SQLite connection.
-    WAL mode improves read/write concurrency.
-    """
-    parent = os.path.dirname(os.path.abspath(DATABASE_PATH))
-    os.makedirs(parent, exist_ok=True)
-
-    conn = sqlite3.connect(
-        DATABASE_PATH,
-        timeout=30,
-        check_same_thread=False,
-    )
-    conn.row_factory = sqlite3.Row
-
-    try:
-        conn.execute("PRAGMA busy_timeout = 30000")
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+def db():
+    with db_lock:
+        conn = sqlite3.connect(DATABASE_PATH, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA busy_timeout=30000")
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
-def init_database():
-    with DB_LOCK, db_connection() as conn:
-        conn.execute("PRAGMA journal_mode = WAL")
+def init_db():
+    folder = os.path.dirname(DATABASE_PATH)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
 
+    with db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
-                username TEXT DEFAULT '',
-                first_name TEXT DEFAULT '',
-                joined_bot_at TEXT NOT NULL,
-                referral_count INTEGER NOT NULL DEFAULT 0,
-                is_banned INTEGER NOT NULL DEFAULT 0
+                first_name TEXT NOT NULL DEFAULT '',
+                username TEXT NOT NULL DEFAULT '',
+                joined_channel INTEGER NOT NULL DEFAULT 0,
+                referrals INTEGER NOT NULL DEFAULT 0,
+                unlocked INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
             )
         """)
 
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS invite_links (
-                invite_link TEXT PRIMARY KEY,
-                owner_id INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                is_active INTEGER NOT NULL DEFAULT 1
+            CREATE TABLE IF NOT EXISTS referral_links (
+                owner_id INTEGER PRIMARY KEY,
+                invite_link TEXT UNIQUE NOT NULL,
+                created_at INTEGER NOT NULL
             )
         """)
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS referral_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                referred_id INTEGER PRIMARY KEY,
                 owner_id INTEGER NOT NULL,
-                referred_user_id INTEGER NOT NULL UNIQUE,
-                invite_link TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                credited_at INTEGER NOT NULL
             )
         """)
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-        """)
-
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_referral_owner
-            ON referral_events(owner_id)
-        """)
-
-    logger.info("Database initialized.")
-
-
-def now_iso():
-    return datetime.now(timezone.utc).isoformat()
 
 
 def register_user(user):
-    with DB_LOCK, db_connection() as conn:
+    with db() as conn:
         conn.execute("""
             INSERT INTO users (
-                user_id, username, first_name, joined_bot_at
-            )
-            VALUES (?, ?, ?, ?)
+                user_id, first_name, username, created_at
+            ) VALUES (?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
-                username = excluded.username,
-                first_name = excluded.first_name
+                first_name=excluded.first_name,
+                username=excluded.username
         """, (
             user.id,
-            user.username or "",
             user.first_name or "",
-            now_iso(),
+            user.username or "",
+            int(time.time()),
         ))
 
 
 def get_user(user_id):
-    with DB_LOCK, db_connection() as conn:
+    with db() as conn:
         return conn.execute(
-            "SELECT * FROM users WHERE user_id = ?",
+            "SELECT * FROM users WHERE user_id=?",
             (user_id,),
         ).fetchone()
 
 
 def get_referral_count(user_id):
-    with DB_LOCK, db_connection() as conn:
-        row = conn.execute("""
-            SELECT COUNT(*) AS total
-            FROM referral_events
-            WHERE owner_id = ?
-        """, (user_id,)).fetchone()
-
-    return int(row["total"])
+    row = get_user(user_id)
+    return int(row["referrals"]) if row else 0
 
 
-def get_total_users():
-    with DB_LOCK, db_connection() as conn:
+def is_unlocked(user_id):
+    row = get_user(user_id)
+    return bool(row and row["unlocked"])
+
+
+def set_channel_verified(user_id):
+    with db() as conn:
+        conn.execute(
+            "UPDATE users SET joined_channel=1 WHERE user_id=?",
+            (user_id,),
+        )
+
+
+# ==============================
+# CHANNEL MEMBERSHIP
+# ==============================
+
+def check_membership(user_id):
+    """
+    Returns:
+        True  = member
+        False = not a member
+        None  = Telegram/API error
+    """
+    try:
+        member = bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status in ("creator", "administrator", "member") or (
+            member.status == "restricted"
+            and getattr(member, "is_member", False)
+        )
+    except Exception:
+        log.exception("Membership check failed for user %s", user_id)
+        return None
+
+
+# ==============================
+# PERSONAL REFERRAL LINKS
+# ==============================
+
+def get_personal_referral_link(user_id):
+    with db() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS total FROM users"
+            "SELECT invite_link FROM referral_links WHERE owner_id=?",
+            (user_id,),
         ).fetchone()
-    return int(row["total"])
 
+        if row:
+            return row["invite_link"]
 
-def get_total_referrals():
-    with DB_LOCK, db_connection() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) AS total FROM referral_events"
-        ).fetchone()
-    return int(row["total"])
+        # This link is created by THIS bot for the configured channel.
+        invite = bot.create_chat_invite_link(
+            chat_id=CHANNEL_ID,
+            name=f"Referral {user_id}",
+            creates_join_request=False,
+        )
 
-
-def get_leaderboard(limit=10):
-    with DB_LOCK, db_connection() as conn:
-        return conn.execute("""
-            SELECT
-                u.user_id,
-                u.username,
-                u.first_name,
-                COUNT(r.id) AS total
-            FROM users u
-            LEFT JOIN referral_events r
-                ON r.owner_id = u.user_id
-            WHERE u.is_banned = 0
-            GROUP BY u.user_id
-            ORDER BY total DESC, u.joined_bot_at ASC
-            LIMIT ?
-        """, (limit,)).fetchall()
-
-
-def save_invite_link(link, owner_id):
-    with DB_LOCK, db_connection() as conn:
         conn.execute("""
-            INSERT INTO invite_links (
-                invite_link, owner_id, created_at, is_active
-            )
-            VALUES (?, ?, ?, 1)
-            ON CONFLICT(invite_link) DO UPDATE SET
-                owner_id = excluded.owner_id,
-                is_active = 1
-        """, (link, owner_id, now_iso()))
+            INSERT INTO referral_links (owner_id, invite_link, created_at)
+            VALUES (?, ?, ?)
+        """, (user_id, invite.invite_link, int(time.time())))
+
+        return invite.invite_link
 
 
-def get_invite_owner(invite_link):
-    with DB_LOCK, db_connection() as conn:
-        row = conn.execute("""
-            SELECT owner_id
-            FROM invite_links
-            WHERE invite_link = ? AND is_active = 1
-        """, (invite_link,)).fetchone()
+# ==============================
+# REFERRAL CREDIT
+# ==============================
 
-    return int(row["owner_id"]) if row else None
-
-
-def record_referral(owner_id, referred_user_id, invite_link):
+def credit_referral(owner_id, referred_id):
     """
-    Count each referred Telegram user at most once.
-    Prevent self-referrals and referrals for unknown owners.
+    Call only after a real Telegram membership update confirms
+    that the referred user joined using a known personal invite link.
     """
-    if owner_id == referred_user_id:
+    if owner_id == referred_id:
         return False
 
-    with DB_LOCK, db_connection() as conn:
+    with db() as conn:
         owner = conn.execute(
-            "SELECT user_id FROM users WHERE user_id = ?",
+            "SELECT user_id FROM users WHERE user_id=?",
             (owner_id,),
         ).fetchone()
 
         referred = conn.execute(
-            "SELECT user_id FROM users WHERE user_id = ?",
-            (referred_user_id,),
+            "SELECT joined_channel FROM users WHERE user_id=?",
+            (referred_id,),
         ).fetchone()
 
         if not owner or not referred:
             return False
 
-        existing = conn.execute(
-            "SELECT id FROM referral_events WHERE referred_user_id = ?",
-            (referred_user_id,),
-        ).fetchone()
+        if not referred["joined_channel"]:
+            return False
 
-        if existing:
+        # PRIMARY KEY prevents counting the same referred user twice.
+        cur = conn.execute("""
+            INSERT OR IGNORE INTO referral_events (
+                referred_id, owner_id, credited_at
+            ) VALUES (?, ?, ?)
+        """, (referred_id, owner_id, int(time.time())))
+
+        if cur.rowcount != 1:
             return False
 
         conn.execute("""
-            INSERT INTO referral_events (
-                owner_id, referred_user_id, invite_link, created_at
-            )
-            VALUES (?, ?, ?, ?)
-        """, (owner_id, referred_user_id, invite_link, now_iso()))
-
-        conn.execute("""
             UPDATE users
-            SET referral_count = referral_count + 1
-            WHERE user_id = ?
-        """, (owner_id,))
+            SET referrals=referrals+1,
+                unlocked=CASE
+                    WHEN referrals+1 >= ? THEN 1
+                    ELSE unlocked
+                END
+            WHERE user_id=?
+        """, (REQUIRED_REFERRALS, owner_id))
 
     return True
 
 
-# ============================================================
-# UI HELPERS
-# ============================================================
-
-def safe_name(user):
-    name = user.first_name if user else "Student"
-    return html.escape(name or "Student")
-
-
-def main_menu():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-
-    markup.add(
-        types.InlineKeyboardButton(
-            "🎁 Get Referral Link",
-            callback_data="get_link",
-        ),
-        types.InlineKeyboardButton(
-            "📊 My Dashboard",
-            callback_data="dashboard",
-        ),
-    )
-
-    markup.add(
-        types.InlineKeyboardButton(
-            "📚 PDF Center",
-            callback_data="pdf_center",
-        ),
-        types.InlineKeyboardButton(
-            "🏆 Leaderboard",
-            callback_data="leaderboard",
-        ),
-    )
-
-    markup.add(
-        types.InlineKeyboardButton(
-            "📢 Study Channel",
-            url=f"https://t.me/{CHANNEL_USERNAME}",
-        )
-    )
-
-    return markup
-
-
-def home_text(user):
-    referrals = get_referral_count(user.id)
-    unlocked = sum(
-        1 for reward in PDF_REWARDS
-        if referrals >= reward["threshold"]
-    )
-
-    return (
-        "✨ <b>BHRAMASTRA • CLASS 10</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"👋 Welcome, <b>{safe_name(user)}</b>!\n\n"
-        "📚 <b>Your Study Rewards</b>\n"
-        "Invite friends and unlock study PDFs.\n\n"
-        f"👥 Successful referrals: <b>{referrals}</b>\n"
-        f"🔓 PDFs unlocked: <b>{unlocked}/{len(PDF_REWARDS)}</b>\n\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "Choose an option below to continue."
-    )
-
-
-def send_home(chat_id, user):
-    bot.send_message(
-        chat_id,
-        home_text(user),
-        reply_markup=main_menu(),
-        disable_web_page_preview=True,
-    )
-
-
-def get_or_create_invite(user_id):
-    """
-    Reuse a previously saved active link where possible.
-    If it no longer works, create a replacement.
-    """
-    with DB_LOCK, db_connection() as conn:
-        rows = conn.execute("""
-            SELECT invite_link
-            FROM invite_links
-            WHERE owner_id = ? AND is_active = 1
-            ORDER BY created_at DESC
-        """, (user_id,)).fetchall()
-
-    for row in rows:
-        link = row["invite_link"]
-
-        try:
-            member = bot.get_chat_member(CHANNEL_ID, user_id)
-            if member.status in ("left", "kicked"):
-                # The owner need not already be a member to share a link.
-                pass
-        except Exception:
-            pass
-
-        try:
-            bot.get_chat_member(CHANNEL_ID, bot.get_me().id)
-            # The bot must have sufficient channel permissions.
-        except Exception as exc:
-            logger.warning("Cannot verify bot channel access: %s", exc)
-
-        # A saved link may still work; use it to avoid link duplication.
-        return link
-
-    created = bot.create_chat_invite_link(
-        CHANNEL_ID,
-        name=f"ref_{user_id}",
-        creates_join_request=False,
-    )
-
-    save_invite_link(created.invite_link, user_id)
-    return created.invite_link
-
-
-# ============================================================
-# START / REFERRAL DEEP LINKS
-# ============================================================
-
-@bot.message_handler(commands=["start"])
-def start_handler(message):
-    user = message.from_user
-    register_user(user)
-
-    # A referral deep link looks like /start ref_123456789
-    parts = (message.text or "").split(maxsplit=1)
-
-    if len(parts) == 2:
-        payload = parts[1].strip()
-
-        if payload.startswith("ref_"):
-            try:
-                owner_id = int(payload[4:])
-                if owner_id != user.id:
-                    # The bot deep-link registers an interest, but the
-                    # referral is credited only after a tracked channel join.
-                    with DB_LOCK, db_connection() as conn:
-                        conn.execute("""
-                            INSERT INTO settings (key, value)
-                            VALUES (?, ?)
-                            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                        """, (
-                            f"pending_ref_{user.id}",
-                            str(owner_id),
-                        ))
-            except ValueError:
-                pass
-
-    send_home(message.chat.id, user)
-
-
-# ============================================================
-# CALLBACKS
-# ============================================================
-
-@bot.callback_query_handler(func=lambda call: True)
-def callback_handler(call):
-    user = call.from_user
-    register_user(user)
-
-    try:
-        if call.data == "home":
-            bot.answer_callback_query(call.id)
-            bot.edit_message_text(
-                home_text(user),
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=main_menu(),
-                disable_web_page_preview=True,
-            )
-            return
-
-        if call.data == "get_link":
-            link = get_or_create_invite(user.id)
-
-            markup = types.InlineKeyboardMarkup()
-            markup.add(
-                types.InlineKeyboardButton(
-                    "📢 Open Channel",
-                    url=f"https://t.me/{CHANNEL_USERNAME}",
-                )
-            )
-            markup.add(
-                types.InlineKeyboardButton(
-                    "🔄 Refresh Dashboard",
-                    callback_data="dashboard",
-                )
-            )
-            markup.add(
-                types.InlineKeyboardButton(
-                    "⬅️ Main Menu",
-                    callback_data="home",
-                )
-            )
-
-            text = (
-                "🎁 <b>YOUR PERSONAL INVITE LINK</b>\n"
-                "━━━━━━━━━━━━━━━━━━\n\n"
-                "Share this channel invitation with your friends:\n\n"
-                f"<code>{html.escape(link)}</code>\n\n"
-                "📌 <b>How it works</b>\n"
-                "1. Share your unique link.\n"
-                "2. A new person must join the channel through it.\n"
-                "3. The bot records eligible joins.\n"
-                "4. Your PDF rewards unlock as you progress.\n\n"
-                "⚠️ Existing members and repeated joins do not count."
-            )
-
-            bot.answer_callback_query(call.id)
-            bot.edit_message_text(
-                text,
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=markup,
-                disable_web_page_preview=True,
-            )
-            return
-
-        if call.data == "dashboard":
-            count = get_referral_count(user.id)
-            unlocked = sum(
-                1 for reward in PDF_REWARDS
-                if count >= reward["threshold"]
-            )
-            next_reward = next(
-                (
-                    reward for reward in PDF_REWARDS
-                    if count < reward["threshold"]
-                ),
-                None,
-            )
-
-            progress = (
-                f"Next reward: <b>{html.escape(next_reward['title'])}</b>\n"
-                f"Need <b>{next_reward['threshold'] - count}</b> more referral(s)."
-                if next_reward else
-                "🎉 <b>All PDF rewards unlocked!</b>"
-            )
-
-            text = (
-                "📊 <b>MY REFERRAL DASHBOARD</b>\n"
-                "━━━━━━━━━━━━━━━━━━\n\n"
-                f"👤 Student: <b>{safe_name(user)}</b>\n"
-                f"🆔 Telegram ID: <code>{user.id}</code>\n\n"
-                f"👥 Successful referrals: <b>{count}</b>\n"
-                f"🔓 Unlocked PDFs: <b>{unlocked}/{len(PDF_REWARDS)}</b>\n\n"
-                f"{progress}\n\n"
-                "━━━━━━━━━━━━━━━━━━\n"
-                "Counts are based on eligible, uniquely tracked channel joins."
-            )
-
-            markup = types.InlineKeyboardMarkup()
-            markup.row(
-                types.InlineKeyboardButton(
-                    "🎁 Get Invite Link",
-                    callback_data="get_link",
-                ),
-                types.InlineKeyboardButton(
-                    "📚 PDF Center",
-                    callback_data="pdf_center",
-                ),
-            )
-            markup.add(
-                types.InlineKeyboardButton(
-                    "⬅️ Main Menu",
-                    callback_data="home",
-                )
-            )
-
-            bot.answer_callback_query(call.id)
-            bot.edit_message_text(
-                text,
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=markup,
-            )
-            return
-
-        if call.data == "pdf_center":
-            count = get_referral_count(user.id)
-            lines = [
-                "📚 <b>BHRAMASTRA PDF CENTER</b>",
-                "━━━━━━━━━━━━━━━━━━",
-                "",
-                f"Your referrals: <b>{count}</b>",
-                "",
-            ]
-
-            markup = types.InlineKeyboardMarkup(row_width=1)
-
-            for reward in PDF_REWARDS:
-                unlocked = count >= reward["threshold"]
-                status = "✅ UNLOCKED" if unlocked else "🔒 LOCKED"
-
-                lines.append(
-                    f"{reward['emoji']} <b>{html.escape(reward['title'])}</b>"
-                    f" — {status}"
-                )
-
-                if unlocked:
-                    markup.add(
-                        types.InlineKeyboardButton(
-                            f"📥 {reward['title']} PDF",
-                            url=reward["url"],
-                        )
-                    )
-                else:
-                    lines.append(
-                        f"   Unlock at {reward['threshold']} referral(s)."
-                    )
-
-            markup.add(
-                types.InlineKeyboardButton(
-                    "🎁 Get Invite Link",
-                    callback_data="get_link",
-                )
-            )
-            markup.add(
-                types.InlineKeyboardButton(
-                    "⬅️ Main Menu",
-                    callback_data="home",
-                )
-            )
-
-            bot.answer_callback_query(call.id)
-            bot.edit_message_text(
-                "\n".join(lines),
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=markup,
-                disable_web_page_preview=True,
-            )
-            return
-
-        if call.data == "leaderboard":
-            rows = get_leaderboard(10)
-            lines = [
-                "🏆 <b>TOP REFERRERS</b>",
-                "━━━━━━━━━━━━━━━━━━",
-                "",
-            ]
-
-            if not rows:
-                lines.append("No referrals yet. Be the first!")
-            else:
-                medals = ["🥇", "🥈", "🥉"]
-                for index, row in enumerate(rows):
-                    name = row["first_name"] or "Student"
-                    name = html.escape(name)
-                    prefix = medals[index] if index < 3 else f"{index + 1}."
-                    lines.append(
-                        f"{prefix} <b>{name}</b> — "
-                        f"{row['total']} referral(s)"
-                    )
-
-            markup = types.InlineKeyboardMarkup()
-            markup.add(
-                types.InlineKeyboardButton(
-                    "⬅️ Main Menu",
-                    callback_data="home",
-                )
-            )
-
-            bot.answer_callback_query(call.id)
-            bot.edit_message_text(
-                "\n".join(lines),
-                call.message.chat.id,
-                call.message.message_id,
-                reply_markup=markup,
-            )
-            return
-
-        bot.answer_callback_query(
-            call.id,
-            "This option is not available.",
-            show_alert=True,
-        )
-
-    except Exception:
-        logger.exception("Callback failed: %s", call.data)
-        try:
-            bot.answer_callback_query(
-                call.id,
-                "Something went wrong. Please try again.",
-                show_alert=True,
-            )
-        except Exception:
-            pass
-
-
-# ============================================================
-# CHANNEL JOIN TRACKING
-# ============================================================
-
 @bot.chat_member_handler()
-def channel_member_handler(update):
+def on_channel_member_update(update):
     """
-    Telegram must send chat_member updates to the bot.
-    The bot must be an administrator in the target channel.
-
-    The actual invite link in chat_member.invite_link is the primary
-    source for attribution. A /start referral payload is not treated
-    as proof of a channel join.
+    Telegram must deliver chat_member updates.
+    The bot must be an administrator in the channel.
     """
     try:
-        if update.chat.id != CHANNEL_ID:
+        if str(update.chat.id) != str(CHANNEL_ID):
             return
 
         old_status = update.old_chat_member.status
         new_status = update.new_chat_member.status
 
-        was_member = old_status in ("member", "administrator", "creator")
-        is_member = new_status in ("member", "administrator", "creator")
-
-        # Count only a transition from non-member to member.
-        if was_member or not is_member:
-            return
-
-        joined_user = update.new_chat_member.user
-
-        if joined_user.is_bot:
-            return
-
-        register_user(joined_user)
-
-        invite_obj = getattr(update, "invite_link", None)
-        invite_url = getattr(invite_obj, "invite_link", None)
-
-        owner_id = None
-
-        if invite_url:
-            owner_id = get_invite_owner(invite_url)
-
-        # Fallback: pending deep-link owner, but only if that owner
-        # has a known active invite link recorded by this bot.
-        if owner_id is None:
-            with DB_LOCK, db_connection() as conn:
-                row = conn.execute("""
-                    SELECT value FROM settings WHERE key = ?
-                """, (f"pending_ref_{joined_user.id}",)).fetchone()
-
-            if row:
-                try:
-                    candidate = int(row["value"])
-                    with DB_LOCK, db_connection() as conn:
-                        known = conn.execute("""
-                            SELECT invite_link
-                            FROM invite_links
-                            WHERE owner_id = ? AND is_active = 1
-                            LIMIT 1
-                        """, (candidate,)).fetchone()
-
-                    if known:
-                        owner_id = candidate
-                except ValueError:
-                    pass
-
-        if owner_id is None:
-            logger.info(
-                "New channel member %s joined without a known referral link.",
-                joined_user.id,
-            )
-            return
-
-        credited = record_referral(
-            owner_id,
-            joined_user.id,
-            invite_url or "deep_link_fallback",
+        was_member = old_status in (
+            "creator", "administrator", "member"
+        ) or (
+            old_status == "restricted"
+            and getattr(update.old_chat_member, "is_member", False)
         )
 
-        if not credited:
-            logger.info(
-                "Referral not credited: owner=%s referred=%s",
-                owner_id,
-                joined_user.id,
+        is_member_now = new_status in (
+            "creator", "administrator", "member"
+        ) or (
+            new_status == "restricted"
+            and getattr(update.new_chat_member, "is_member", False)
+        )
+
+        member_user = update.new_chat_member.user
+        register_user(member_user)
+
+        if is_member_now:
+            set_channel_verified(member_user.id)
+
+        # Credit only on a transition from non-member to member.
+        if was_member or not is_member_now:
+            return
+
+        invite = getattr(update, "invite_link", None)
+        invite_url = getattr(invite, "invite_link", None)
+
+        if not invite_url:
+            log.info(
+                "Join detected for %s without invite-link attribution.",
+                member_user.id,
             )
             return
 
-        count = get_referral_count(owner_id)
+        with db() as conn:
+            row = conn.execute(
+                "SELECT owner_id FROM referral_links WHERE invite_link=?",
+                (invite_url,),
+            ).fetchone()
 
-        try:
-            bot.send_message(
-                owner_id,
-                "🎉 <b>NEW REFERRAL CONFIRMED!</b>\n"
-                "━━━━━━━━━━━━━━━━━━\n\n"
-                "A new member joined through your referral.\n\n"
-                f"👥 Total successful referrals: <b>{count}</b>\n"
-                "📚 Open your dashboard to see unlocked rewards.",
-                reply_markup=types.InlineKeyboardMarkup().add(
-                    types.InlineKeyboardButton(
-                        "📊 Open Dashboard",
-                        callback_data="dashboard",
+        if not row:
+            log.info("Join used an invite link not created by this bot.")
+            return
+
+        owner_id = int(row["owner_id"])
+
+        if credit_referral(owner_id, member_user.id):
+            count = get_referral_count(owner_id)
+            log.info(
+                "Referral credited: owner=%s count=%s",
+                owner_id, count,
+            )
+
+            try:
+                bot.send_message(
+                    owner_id,
+                    "🎉 <b>New successful referral!</b>\n\n"
+                    f"Your progress: <b>{count}/{REQUIRED_REFERRALS}</b>\n"
+                    "Invite more friends to unlock the PDF collection.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                log.exception("Could not notify referral owner")
+
+            if count >= REQUIRED_REFERRALS:
+                try:
+                    bot.send_message(
+                        owner_id,
+                        "🏆 <b>Congratulations!</b>\n\n"
+                        "आपके 10 successful referrals पूरे हो गए हैं।\n"
+                        "अब Bhramastra PDF collection unlock हो गई है।\n\n"
+                        "PDF पाने के लिए /pdf लिखें।",
+                        parse_mode="HTML",
                     )
-                ),
-            )
-        except Exception as exc:
-            logger.info("Referral notification could not be sent: %s", exc)
-
-        # Remove any pending deep-link marker after successful credit.
-        with DB_LOCK, db_connection() as conn:
-            conn.execute(
-                "DELETE FROM settings WHERE key = ?",
-                (f"pending_ref_{joined_user.id}",),
-            )
+                except Exception:
+                    log.exception("Could not send unlock message")
 
     except Exception:
-        logger.exception("Channel member update handler failed.")
+        log.exception("Error processing channel membership update")
 
 
-# ============================================================
-# ADMIN COMMANDS
-# ============================================================
+# ==============================
+# KEYBOARDS
+# ==============================
+
+def join_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    keyboard.add(
+        types.InlineKeyboardButton(
+            "📢 JOIN CHANNEL",
+            url=CHANNEL_URL,
+        ),
+        types.InlineKeyboardButton(
+            "✅ VERIFY MEMBERSHIP",
+            callback_data="verify_membership",
+        ),
+    )
+    return keyboard
+
+
+def main_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        types.InlineKeyboardButton(
+            "🔗 My Referral Link",
+            callback_data="my_referral",
+        ),
+        types.InlineKeyboardButton(
+            "📊 My Progress",
+            callback_data="my_progress",
+        ),
+        types.InlineKeyboardButton(
+            "📚 Get PDF Books",
+            callback_data="get_pdfs",
+        ),
+        types.InlineKeyboardButton(
+            "📢 Join Channel",
+            url=CHANNEL_URL,
+        ),
+    )
+    return keyboard
+
+
+# ==============================
+# START MESSAGE
+# ==============================
+
+def send_welcome(chat_id, first_name):
+    text = (
+        "📚 <b>BHRAMASTRA BOOKS</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"नमस्ते <b>{first_name}</b>! 👋\n\n"
+        "🎓 <b>Full Book PDF Free Download</b>\n"
+        "अपनी study books और PDF collection पाने के लिए "
+        "पहले हमारे official channel को Join करें।\n\n"
+        "👇 <b>पहले Join करें, फिर Verify करें।</b>"
+    )
+
+    bot.send_message(
+        chat_id,
+        text,
+        parse_mode="HTML",
+        reply_markup=join_keyboard(),
+    )
+
+
+@bot.message_handler(commands=["start"])
+def start_command(message):
+    user = message.from_user
+    register_user(user)
+
+    # Referral deep-link is not proof of a successful referral.
+    # Actual credit occurs only after Telegram confirms channel join
+    # through the recorded invite link.
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) > 1 and parts[1].startswith("ref_"):
+        try:
+            owner_id = int(parts[1][4:])
+            if owner_id != user.id and get_user(owner_id):
+                log.info(
+                    "Referral start recorded: owner=%s user=%s",
+                    owner_id, user.id,
+                )
+        except ValueError:
+            pass
+
+    send_welcome(message.chat.id, user.first_name or "Student")
+
+
+# ==============================
+# VERIFY CHANNEL
+# ==============================
+
+@bot.callback_query_handler(func=lambda call: call.data == "verify_membership")
+def verify_membership(call):
+    user_id = call.from_user.id
+
+    try:
+        bot.answer_callback_query(
+            call.id,
+            "Membership check हो रही है…",
+        )
+    except Exception:
+        pass
+
+    result = check_membership(user_id)
+
+    if result is None:
+        bot.send_message(
+            call.message.chat.id,
+            "⚠️ अभी membership verify नहीं हो पाई।\n"
+            "कुछ देर बाद फिर कोशिश करें।",
+            reply_markup=join_keyboard(),
+        )
+        return
+
+    if not result:
+        bot.send_message(
+            call.message.chat.id,
+            "❌ <b>आप अभी channel में joined नहीं हैं।</b>\n\n"
+            "पहले Join Channel दबाएँ। Join करने के बाद "
+            "Verify Membership दबाएँ।",
+            parse_mode="HTML",
+            reply_markup=join_keyboard(),
+        )
+        return
+
+    register_user(call.from_user)
+    set_channel_verified(user_id)
+
+    count = get_referral_count(user_id)
+
+    success_text = (
+        "✅ <b>MEMBERSHIP VERIFIED!</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "🎉 आपका channel verification सफल हो गया है!\n\n"
+        "📚 <b>Bhramastra Books — Full Book PDF</b>\n\n"
+        f"🔗 PDF collection unlock करने के लिए "
+        f"<b>{REQUIRED_REFERRALS}</b> successful referrals पूरे करें।\n\n"
+        f"📊 आपका progress: <b>{count}/{REQUIRED_REFERRALS}</b>\n\n"
+        "नीचे My Referral Link दबाकर अपना personal invite link पाएँ।"
+    )
+
+    bot.send_message(
+        call.message.chat.id,
+        success_text,
+        parse_mode="HTML",
+        reply_markup=main_keyboard(),
+    )
+
+
+# ==============================
+# REFERRAL LINK BUTTON
+# ==============================
+
+@bot.callback_query_handler(func=lambda call: call.data == "my_referral")
+def my_referral(call):
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+
+    user_id = call.from_user.id
+    result = check_membership(user_id)
+
+    if result is not True:
+        bot.send_message(
+            call.message.chat.id,
+            "पहले channel Join करके Verify करें।",
+            reply_markup=join_keyboard(),
+        )
+        return
+
+    register_user(call.from_user)
+    set_channel_verified(user_id)
+
+    try:
+        link = get_personal_referral_link(user_id)
+    except Exception:
+        log.exception("Could not create personal invite link")
+        bot.send_message(
+            call.message.chat.id,
+            "⚠️ Referral link नहीं बन पाया।\n"
+            "कृपया जाँचें कि bot channel का administrator है "
+            "और उसे invite links बनाने की permission है।",
+        )
+        return
+
+    count = get_referral_count(user_id)
+
+    bot.send_message(
+        call.message.chat.id,
+        "🔗 <b>YOUR PERSONAL REFERRAL LINK</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"<code>{link}</code>\n\n"
+        "📤 इस link को अपने दोस्तों के साथ share करें।\n"
+        "जब कोई नया user इस link से channel Join करेगा "
+        "और Telegram उसका invite-link attribution देगा, "
+        "तभी referral count होगा।\n\n"
+        f"🎯 Progress: <b>{count}/{REQUIRED_REFERRALS}</b>\n"
+        "🏆 10 valid referrals पर PDF collection unlock होगी।",
+        parse_mode="HTML",
+    )
+
+
+# ==============================
+# PROGRESS BUTTON
+# ==============================
+
+@bot.callback_query_handler(func=lambda call: call.data == "my_progress")
+def my_progress(call):
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+
+    user_id = call.from_user.id
+    count = get_referral_count(user_id)
+    unlocked = is_unlocked(user_id)
+
+    if unlocked:
+        status = "🔓 <b>PDF ACCESS UNLOCKED!</b>"
+    else:
+        status = (
+            f"🔒 <b>{REQUIRED_REFERRALS - count}</b> "
+            "और successful referrals चाहिए।"
+        )
+
+    bot.send_message(
+        call.message.chat.id,
+        "📊 <b>YOUR REFERRAL DASHBOARD</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 Successful referrals: <b>{count}</b>\n"
+        f"🎯 Target: <b>{REQUIRED_REFERRALS}</b>\n"
+        f"📈 Progress: <b>{min(count, REQUIRED_REFERRALS)}/"
+        f"{REQUIRED_REFERRALS}</b>\n\n"
+        f"{status}\n\n"
+        "अपना link पाने के लिए My Referral Link दबाएँ।",
+        parse_mode="HTML",
+        reply_markup=main_keyboard(),
+    )
+
+
+# ==============================
+# PDF CENTER
+# ==============================
+
+@bot.callback_query_handler(func=lambda call: call.data == "get_pdfs")
+def pdf_button(call):
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+
+    show_pdfs(call.message.chat.id, call.from_user.id)
+
+
+@bot.message_handler(commands=["pdf"])
+def pdf_command(message):
+    show_pdfs(message.chat.id, message.from_user.id)
+
+
+def show_pdfs(chat_id, user_id):
+    result = check_membership(user_id)
+
+    if result is not True:
+        bot.send_message(
+            chat_id,
+            "📢 PDF collection देखने से पहले channel Join करके Verify करें।",
+            reply_markup=join_keyboard(),
+        )
+        return
+
+    register_user(bot.get_chat_member(CHANNEL_ID, user_id).user)
+    set_channel_verified(user_id)
+
+    if not is_unlocked(user_id):
+        count = get_referral_count(user_id)
+        bot.send_message(
+            chat_id,
+            "🔒 <b>PDF COLLECTION LOCKED</b>\n\n"
+            "आपको PDF collection unlock करने के लिए "
+            f"<b>{REQUIRED_REFERRALS}</b> successful referrals पूरे करने हैं।\n\n"
+            f"आपका progress: <b>{count}/{REQUIRED_REFERRALS}</b>\n\n"
+            "My Referral Link दबाकर अपना personal link पाएँ।",
+            parse_mode="HTML",
+            reply_markup=main_keyboard(),
+        )
+        return
+
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    for title, url in PDF_LINKS:
+        keyboard.add(
+            types.InlineKeyboardButton(title, url=url)
+        )
+
+    bot.send_message(
+        chat_id,
+        "🏆 <b>BHRAMASTRA PDF COLLECTION</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "🎉 आपके 10 valid referrals पूरे हो चुके हैं!\n"
+        "नीचे अपनी आवश्यक PDF चुनें।",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
+# ==============================
+# ADMIN STATS
+# ==============================
 
 def is_admin(user_id):
-    return ADMIN_ID != 0 and user_id == ADMIN_ID
+    admin_id = os.getenv("ADMIN_ID", "").strip()
+    return bool(admin_id) and str(user_id) == admin_id
 
 
 @bot.message_handler(commands=["stats"])
-def stats_handler(message):
+def stats_command(message):
     if not is_admin(message.from_user.id):
         bot.reply_to(message, "⛔ Admin only.")
         return
+
+    with db() as conn:
+        total = conn.execute(
+            "SELECT COUNT(*) AS n FROM users"
+        ).fetchone()["n"]
+
+        verified = conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE joined_channel=1"
+        ).fetchone()["n"]
+
+        unlocked = conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE unlocked=1"
+        ).fetchone()["n"]
+
+        referrals = conn.execute(
+            "SELECT COUNT(*) AS n FROM referral_events"
+        ).fetchone()["n"]
 
     bot.reply_to(
         message,
         "📊 <b>BOT STATISTICS</b>\n\n"
-        f"👥 Registered users: <b>{get_total_users()}</b>\n"
-        f"🎁 Confirmed referrals: <b>{get_total_referrals()}</b>",
+        f"👥 Registered users: <b>{total}</b>\n"
+        f"✅ Verified users: <b>{verified}</b>\n"
+        f"🔗 Successful referrals: <b>{referrals}</b>\n"
+        f"🏆 Users unlocked: <b>{unlocked}</b>",
+        parse_mode="HTML",
     )
 
 
-@bot.message_handler(commands=["broadcast"])
-def broadcast_handler(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "⛔ Admin only.")
-        return
-
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2:
-        bot.reply_to(
-            message,
-            "Usage:\n<code>/broadcast Your announcement here</code>",
-        )
-        return
-
-    announcement = parts[1].strip()
-
-    with DB_LOCK, db_connection() as conn:
-        rows = conn.execute(
-            "SELECT user_id FROM users WHERE is_banned = 0"
-        ).fetchall()
-
-    bot.reply_to(
-        message,
-        f"📣 Broadcast started for {len(rows)} registered users.",
-    )
-
-    sent = 0
-    failed = 0
-
-    for row in rows:
-        try:
-            bot.send_message(
-                int(row["user_id"]),
-                "📢 <b>ANNOUNCEMENT</b>\n\n" + html.escape(announcement),
-            )
-            sent += 1
-            time.sleep(0.04)
-        except Exception:
-            failed += 1
-
-    bot.send_message(
-        message.chat.id,
-        "✅ <b>Broadcast finished</b>\n\n"
-        f"📨 Sent: {sent}\n"
-        f"⚠️ Failed: {failed}",
-    )
-
+# ==============================
+# HELP
+# ==============================
 
 @bot.message_handler(commands=["help"])
-def help_handler(message):
-    text = (
-        "ℹ️ <b>BHRAMASTRA BOT HELP</b>\n\n"
-        "/start — Open the main menu\n"
-        "/help — Show this help message\n"
+def help_command(message):
+    bot.reply_to(
+        message,
+        "📚 <b>Bhramastra Books Bot</b>\n\n"
+        "/start — Start bot\n"
+        "/pdf — Open PDF collection\n"
+        "/help — Help",
+        parse_mode="HTML",
     )
 
-    if is_admin(message.from_user.id):
-        text += (
-            "\n<b>Admin commands</b>\n"
-            "/stats — View bot statistics\n"
-            "/broadcast message — Send an announcement\n"
-        )
 
-    bot.reply_to(message, text)
-
-
-# ============================================================
-# ERROR HANDLING AND STARTUP
-# ============================================================
-
-def main():
-    init_database()
-
-    me = bot.get_me()
-    logger.info("Starting bot @%s (ID %s)", me.username, me.id)
-
-    # Polling and webhook cannot be active simultaneously.
-    # This bot uses polling; remove any existing webhook first.
-    bot.remove_webhook()
-
-    # chat_member is required for channel join tracking.
-    allowed_updates = [
-        "message",
-        "callback_query",
-        "chat_member",
-    ]
-
-    logger.info("Bot polling started.")
-    bot.infinity_polling(
-        timeout=30,
-        long_polling_timeout=30,
-        allowed_updates=allowed_updates,
-        skip_pending=False,
-    )
-
+# ==============================
+# STARTUP
+# ==============================
 
 if __name__ == "__main__":
-    main()
+    init_db()
+
+    me = bot.get_me()
+    log.info("Database initialized.")
+    log.info("Starting bot @%s (ID %s)", me.username, me.id)
+
+    # IMPORTANT:
+    # Only ONE process/service may poll this bot token.
+    bot.infinity_polling(
+        timeout=30,
+        long_polling_timeout=25,
+        allowed_updates=[
+            "message",
+            "callback_query",
+            "chat_member",
+        ],
+        skip_pending=False,
+    )
